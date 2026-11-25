@@ -8,31 +8,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
-
-
-def create_sample_csv(path: Path) -> None:
-    """Crea un CSV de ejemplo si no existe uno real."""
-    data = {
-        "fecha": ["2026-11-18", "2026-11-19", "2026-11-20", "2026-11-21", "2026-11-22"],
-        "canal": ["Meta Ads", "Google Ads", "Orgánico", "Meta Ads", "Google Ads"],
-        "leads": [18, 12, 7, 22, 15],
-        "ventas": [4, 3, 2, 6, 4],
-        "ingresos_cop": [3200000, 2400000, 1500000, 4800000, 3100000],
-    }
-    pd.DataFrame(data).to_csv(path, index=False)
-
 
 def build_weekly_summary(csv_path: Path) -> str:
-    """Calcula métricas clave y genera un resumen ejecutivo semanal."""
+    """Calcula métricas clave y genera un resumen ejecutivo semanal desde un CSV real."""
+    if not csv_path.exists():
+        raise FileNotFoundError(f"No se encontró el archivo de entrada: {csv_path}")
+
     df = pd.read_csv(csv_path)
+    required_cols = {"canal", "leads", "ventas", "ingresos_cop"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"Faltan columnas requeridas en el CSV: {sorted(missing)}")
+
     total_leads = int(df["leads"].sum())
     total_ventas = int(df["ventas"].sum())
     total_ingresos = int(df["ingresos_cop"].sum())
     tasa_conv = (total_ventas / total_leads * 100) if total_leads else 0.0
     mejor_canal = df.groupby("canal")["ingresos_cop"].sum().idxmax()
 
-    summary = (
+    return (
         f"REPORTE SEMANAL AUTOMÁTICO\n"
         f"--------------------------\n"
         f"- Total leads: {total_leads}\n"
@@ -41,32 +35,31 @@ def build_weekly_summary(csv_path: Path) -> str:
         f"- Ingresos totales: ${total_ingresos:,} COP\n"
         f"- Canal más rentable: {mejor_canal}\n"
     )
-    return summary
 
 
 def send_report(summary: str) -> str:
-    """Envía el reporte por correo o lo imprime en modo demo."""
-    if DEMO_MODE or not os.getenv("SMTP_USER") or not os.getenv("SMTP_PASS"):
-        print(summary)
-        return "printed_in_demo_mode"
+    """Envía el reporte semanal por correo vía SMTP."""
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASS")
+    recipient = os.getenv("REPORT_RECIPIENT")
+    if not smtp_user or not smtp_pass or not recipient:
+        raise RuntimeError("SMTP_USER, SMTP_PASS y REPORT_RECIPIENT son obligatorios")
 
     msg = EmailMessage()
     msg["Subject"] = "Reporte Semanal Automático de Ventas y Leads"
-    msg["From"] = os.getenv("SMTP_USER")
-    msg["To"] = os.getenv("REPORT_RECIPIENT", os.getenv("SMTP_USER", ""))
+    msg["From"] = smtp_user
+    msg["To"] = recipient
     msg.set_content(summary)
 
     with smtplib.SMTP(os.getenv("SMTP_HOST", "smtp.gmail.com"), int(os.getenv("SMTP_PORT", "587"))) as server:
         server.starttls()
-        server.login(os.getenv("SMTP_USER", ""), os.getenv("SMTP_PASS", ""))
+        server.login(smtp_user, smtp_pass)
         server.send_message(msg)
     return "sent"
 
 
 if __name__ == "__main__":
-    sample_csv = Path("ventas_semana.csv")
-    if not sample_csv.exists():
-        create_sample_csv(sample_csv)
-    report_text = build_weekly_summary(sample_csv)
+    input_path = Path(os.getenv("REPORT_INPUT_PATH", "ventas_semana.csv"))
+    report_text = build_weekly_summary(input_path)
     status = send_report(report_text)
     print(f"Estado envío: {status}")
