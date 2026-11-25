@@ -9,32 +9,79 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def build_weekly_summary(csv_path: Path) -> str:
-    """Calcula métricas clave y genera un resumen ejecutivo semanal desde un CSV real."""
-    if not csv_path.exists():
-        raise FileNotFoundError(f"No se encontró el archivo de entrada: {csv_path}")
+def load_sales_dataframe(input_path: Path) -> pd.DataFrame:
+    """Carga datos desde CSV o Excel (.xlsx/.xls) y valida esquema."""
+    if not input_path.exists():
+        raise FileNotFoundError(f"No se encontró el archivo de entrada: {input_path}")
 
-    df = pd.read_csv(csv_path)
-    required_cols = {"canal", "leads", "ventas", "ingresos_cop"}
+    suffix = input_path.suffix.lower()
+    if suffix == ".csv":
+        df = pd.read_csv(input_path)
+    elif suffix in {".xlsx", ".xls"}:
+        df = pd.read_excel(input_path)
+    else:
+        raise ValueError(f"Formato no soportado ({suffix}). Usa .csv o .xlsx")
+
+    if df.empty:
+        raise ValueError("El archivo de entrada no contiene filas.")
+
+    # Acepta 'ingresos' o 'ingresos_cop' o 'revenue'
+    if "ingresos" not in df.columns:
+        if "ingresos_cop" in df.columns:
+            df = df.rename(columns={"ingresos_cop": "ingresos"})
+        elif "revenue" in df.columns:
+            df = df.rename(columns={"revenue": "ingresos"})
+
+    required_cols = {"canal", "leads", "ventas", "ingresos"}
     missing = required_cols - set(df.columns)
     if missing:
-        raise ValueError(f"Faltan columnas requeridas en el CSV: {sorted(missing)}")
+        raise ValueError(f"Faltan columnas requeridas: {sorted(missing)}")
+
+    for col in ("leads", "ventas", "ingresos"):
+        cleaned = (
+            df[col]
+            .astype(str)
+            .str.replace(r"[^0-9.\-]", "", regex=True)
+            .replace("", "0")
+        )
+        df[col] = pd.to_numeric(cleaned, errors="coerce").fillna(0)
+
+    df["canal"] = df["canal"].fillna("Sin canal").astype(str).str.strip()
+    return df
+
+
+def build_weekly_summary(input_path: Path, currency: str = "USD") -> str:
+    """Calcula KPIs globales y desglose por canal."""
+    df = load_sales_dataframe(input_path)
 
     total_leads = int(df["leads"].sum())
     total_ventas = int(df["ventas"].sum())
-    total_ingresos = int(df["ingresos_cop"].sum())
+    total_ingresos = float(df["ingresos"].sum())
     tasa_conv = (total_ventas / total_leads * 100) if total_leads else 0.0
-    mejor_canal = df.groupby("canal")["ingresos_cop"].sum().idxmax()
 
-    return (
-        f"REPORTE SEMANAL AUTOMÁTICO\n"
-        f"--------------------------\n"
-        f"- Total leads: {total_leads}\n"
-        f"- Total ventas: {total_ventas}\n"
-        f"- Tasa de conversión: {tasa_conv:.1f}%\n"
-        f"- Ingresos totales: ${total_ingresos:,} COP\n"
-        f"- Canal más rentable: {mejor_canal}\n"
+    by_channel = (
+        df.groupby("canal", as_index=True)[["leads", "ventas", "ingresos"]]
+        .sum()
+        .sort_values("ingresos", ascending=False)
     )
+    mejor_canal = str(by_channel.index[0])
+
+    lines = [
+        "REPORTE SEMANAL AUTOMÁTICO",
+        "--------------------------",
+        f"- Total leads: {total_leads}",
+        f"- Total ventas: {total_ventas}",
+        f"- Tasa de conversión: {tasa_conv:.1f}%",
+        f"- Ingresos totales: {currency} {total_ingresos:,.2f}",
+        f"- Canal más rentable: {mejor_canal}",
+        "",
+        "Desglose por canal:",
+    ]
+    for canal, row in by_channel.iterrows():
+        lines.append(
+            f"  * {canal}: {int(row['leads'])} leads | {int(row['ventas'])} ventas | {currency} {row['ingresos']:,.2f}"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def send_report(summary: str) -> str:
@@ -51,7 +98,11 @@ def send_report(summary: str) -> str:
     msg["To"] = recipient
     msg.set_content(summary)
 
-    with smtplib.SMTP(os.getenv("SMTP_HOST", "smtp.gmail.com"), int(os.getenv("SMTP_PORT", "587"))) as server:
+    with smtplib.SMTP(
+        os.getenv("SMTP_HOST", "smtp.gmail.com"),
+        int(os.getenv("SMTP_PORT", "587")),
+        timeout=15,
+    ) as server:
         server.starttls()
         server.login(smtp_user, smtp_pass)
         server.send_message(msg)
@@ -60,6 +111,7 @@ def send_report(summary: str) -> str:
 
 if __name__ == "__main__":
     input_path = Path(os.getenv("REPORT_INPUT_PATH", "ventas_semana.csv"))
-    report_text = build_weekly_summary(input_path)
+    currency = os.getenv("CURRENCY", "USD")
+    report_text = build_weekly_summary(input_path, currency=currency)
     status = send_report(report_text)
     print(f"Estado envío: {status}")

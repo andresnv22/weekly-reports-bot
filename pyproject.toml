@@ -1,0 +1,19 @@
+[project]
+name = "weekly-reports-bot"
+version = "1.0.0"
+description = "Reads CSV/Excel sales & leads data, validates schema, computes channel KPIs, and emails executive weekly reports"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2.0",
+    "openpyxl>=3.1.5",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,14 +1,16 @@
 # Weekly Reports Bot
 
-Bot en Python que lee datos semanales de ventas/leads desde CSV o Excel, calcula métricas clave (leads, ventas, tasa de conversión, ingresos, mejor canal) y envía un resumen ejecutivo automático por correo todos los lunes.
+Bot en Python que lee reportes semanales de ventas/leads desde **CSV o Excel (`.xlsx`)**, valida el esquema, limpia valores numéricos, calcula KPIs globales y por canal, y envía el resumen ejecutivo por correo SMTP.
 
-## Instalación rápida
+## Instalación y uso
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 cp .env.example .env
-python report_bot.py
+# Define REPORT_INPUT_PATH (tu .csv o .xlsx real) y credenciales SMTP
+uv run python report_bot.py
 ```
 
-En `DEMO_MODE=true`, crea automáticamente `ventas_semana.csv` de ejemplo e imprime el reporte en consola.
+## Pruebas automatizadas
+```bash
+uv run pytest
+```
