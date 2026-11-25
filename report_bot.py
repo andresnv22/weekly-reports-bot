@@ -1,5 +1,6 @@
 import os
 import smtplib
+import ssl
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -46,9 +47,11 @@ def build_weekly_summary(csv_path: Path) -> str:
 
 def send_report(summary: str) -> str:
     """Envía el reporte por correo o lo imprime en modo demo."""
-    if DEMO_MODE or not os.getenv("SMTP_USER") or not os.getenv("SMTP_PASS"):
+    if DEMO_MODE:
         print(summary)
         return "printed_in_demo_mode"
+    if not os.getenv("SMTP_USER") or not os.getenv("SMTP_PASS"):
+        raise RuntimeError("SMTP_USER and SMTP_PASS are required when DEMO_MODE=false")
 
     msg = EmailMessage()
     msg["Subject"] = "Reporte Semanal Automático de Ventas y Leads"
@@ -56,17 +59,20 @@ def send_report(summary: str) -> str:
     msg["To"] = os.getenv("REPORT_RECIPIENT", os.getenv("SMTP_USER", ""))
     msg.set_content(summary)
 
-    with smtplib.SMTP(os.getenv("SMTP_HOST", "smtp.gmail.com"), int(os.getenv("SMTP_PORT", "587"))) as server:
-        server.starttls()
+    with smtplib.SMTP(os.getenv("SMTP_HOST", "smtp.gmail.com"), int(os.getenv("SMTP_PORT", "587")), timeout=15) as server:
+        server.starttls(context=ssl.create_default_context())
         server.login(os.getenv("SMTP_USER", ""), os.getenv("SMTP_PASS", ""))
         server.send_message(msg)
     return "sent"
 
 
 if __name__ == "__main__":
-    sample_csv = Path("ventas_semana.csv")
-    if not sample_csv.exists():
-        create_sample_csv(sample_csv)
-    report_text = build_weekly_summary(sample_csv)
+    input_csv = Path(os.getenv("REPORT_CSV", "ventas_semana.csv"))
+    if not input_csv.exists():
+        if DEMO_MODE:
+            create_sample_csv(input_csv)
+        else:
+            raise FileNotFoundError(f"Missing report input: {input_csv}")
+    report_text = build_weekly_summary(input_csv)
     status = send_report(report_text)
     print(f"Estado envío: {status}")
