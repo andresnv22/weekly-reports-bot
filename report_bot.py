@@ -1,5 +1,6 @@
 import os
 import smtplib
+import ssl
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -103,7 +104,7 @@ def send_report(summary: str) -> str:
         int(os.getenv("SMTP_PORT", "587")),
         timeout=15,
     ) as server:
-        server.starttls()
+        server.starttls(context=ssl.create_default_context())
         server.login(smtp_user, smtp_pass)
         server.send_message(msg)
     return "sent"
