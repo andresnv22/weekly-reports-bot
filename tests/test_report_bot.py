@@ -54,3 +54,45 @@ def test_send_report(monkeypatch):
         status = send_report("Resumen de prueba")
     assert status == "sent"
     mock_smtp.return_value.__enter__.return_value.send_message.assert_called_once()
+
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("$2,000.50", 2000.50), ("2.000,50", 2000.50), ("(COP 1.250,00)", -1250.0), ("0,75", 0.75)],
+)
+def test_parse_numeric_value_supports_common_locales(raw, expected):
+    from report_bot import parse_numeric_value
+
+    assert parse_numeric_value(raw) == expected
+
+
+def test_weekly_summary_filters_date_range(tmp_path):
+    csv_file = tmp_path / "period.csv"
+    csv_file.write_text(
+        chr(10).join([
+            "fecha,canal,leads,ventas,ingresos",
+            "2026-11-01,Old,10,2,100",
+            "2026-11-08,Current,5,1,50",
+            "2026-11-15,Future,20,4,400",
+        ]) + chr(10),
+        encoding="utf-8",
+    )
+    summary = build_weekly_summary(
+        csv_file, currency="COP", start_date="2026-11-05", end_date="2026-11-10"
+    )
+    assert "Total leads: 5" in summary
+    assert "Total ventas: 1" in summary
+    assert "Canal más rentable: Current" in summary
+    assert "Old" not in summary
+    assert "Future" not in summary
+
+
+def test_date_filter_requires_fecha_column(tmp_path):
+    csv_file = tmp_path / "no_dates.csv"
+    csv_file.write_text(
+        chr(10).join(["canal,leads,ventas,ingresos", "Email,2,1,100"]) + chr(10),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="columna fecha"):
+        build_weekly_summary(csv_file, start_date="2026-11-01")

@@ -14,3 +14,7 @@ uv run python report_bot.py
 ```bash
 uv run pytest
 ```
+
+## Filtro de fechas
+
+Para limitar el reporte, define REPORT_START_DATE y REPORT_END_DATE en formato YYYY-MM-DD. Ambos extremos son inclusivos; si no se definen, se procesa todo el archivo.

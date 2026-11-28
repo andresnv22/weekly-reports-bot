@@ -1,6 +1,7 @@
 import os
 import smtplib
 import ssl
+from datetime import date
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -10,7 +11,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def load_sales_dataframe(input_path: Path) -> pd.DataFrame:
+def load_sales_dataframe(
+    input_path: Path, start_date: str | date | None = None, end_date: str | date | None = None
+) -> pd.DataFrame:
     """Carga datos desde CSV o Excel (.xlsx/.xls) y valida esquema."""
     if not input_path.exists():
         raise FileNotFoundError(f"No se encontró el archivo de entrada: {input_path}")
@@ -39,21 +42,77 @@ def load_sales_dataframe(input_path: Path) -> pd.DataFrame:
         raise ValueError(f"Faltan columnas requeridas: {sorted(missing)}")
 
     for col in ("leads", "ventas", "ingresos"):
-        cleaned = (
-            df[col]
-            .astype(str)
-            .str.replace(r"[^0-9.\-]", "", regex=True)
-            .replace("", "0")
-        )
-        df[col] = pd.to_numeric(cleaned, errors="coerce").fillna(0)
+        df[col] = pd.to_numeric(df[col].map(parse_numeric_value), errors="coerce").fillna(0)
 
     df["canal"] = df["canal"].fillna("Sin canal").astype(str).str.strip()
+    if start_date is not None or end_date is not None:
+        if "fecha" not in df.columns:
+            raise ValueError("Se requiere la columna fecha para filtrar el periodo.")
+        dates = pd.to_datetime(df["fecha"], errors="coerce").dt.date
+        if start_date is not None:
+            start = pd.Timestamp(start_date).date()
+            df = df[dates >= start]
+            dates = dates.loc[df.index]
+        if end_date is not None:
+            end = pd.Timestamp(end_date).date()
+            df = df[dates <= end]
+        if df.empty:
+            raise ValueError("No hay filas dentro del periodo solicitado.")
     return df
 
 
-def build_weekly_summary(input_path: Path, currency: str = "USD") -> str:
-    """Calcula KPIs globales y desglose por canal."""
-    df = load_sales_dataframe(input_path)
+def parse_numeric_value(value) -> float:
+    """Parsea importes comunes de EE. UU. y LATAM (1,234.56 y 1.234,56)."""
+    if pd.isna(value):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace(" ", "").replace("'", "")
+    negative_parentheses = text.startswith("(") and text.endswith(")")
+    text = text.strip("()")
+    text = "".join(char for char in text if char.isdigit() or char in ".,+-")
+    if not text or text in {"+", "-", ".", ","}:
+        return 0.0
+    if "," in text and "." in text:
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    elif "," in text:
+        tail = text.rsplit(",", 1)[1]
+        if text.count(",") == 1 and len(tail) in {1, 2} and not text.startswith("0,"):
+            text = text.replace(",", ".")
+        elif text.startswith("0,") and len(tail) <= 3:
+            text = text.replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    elif "." in text:
+        tail = text.rsplit(".", 1)[1]
+        if text.count(".") > 1:
+            if len(tail) in {1, 2}:
+                head, decimal = text.rsplit(".", 1)
+                text = head.replace(".", "") + "." + decimal
+            else:
+                text = text.replace(".", "")
+        elif len(tail) == 3 and not text.startswith("0."):
+            text = text.replace(".", "")
+    try:
+        number = float(text)
+    except ValueError:
+        return 0.0
+    return -abs(number) if negative_parentheses else number
+
+
+def build_weekly_summary(
+    input_path: Path,
+    currency: str = "USD",
+    start_date: str | date | None = None,
+    end_date: str | date | None = None,
+) -> str:
+    """Calcula KPIs globales y desglose por canal para un periodo opcional."""
+    if start_date is not None and end_date is not None and pd.Timestamp(start_date) > pd.Timestamp(end_date):
+        raise ValueError("start_date no puede ser posterior a end_date.")
+    df = load_sales_dataframe(input_path, start_date=start_date, end_date=end_date)
 
     total_leads = int(df["leads"].sum())
     total_ventas = int(df["ventas"].sum())
@@ -113,6 +172,11 @@ def send_report(summary: str) -> str:
 if __name__ == "__main__":
     input_path = Path(os.getenv("REPORT_INPUT_PATH", "ventas_semana.csv"))
     currency = os.getenv("CURRENCY", "USD")
-    report_text = build_weekly_summary(input_path, currency=currency)
+    report_text = build_weekly_summary(
+        input_path,
+        currency=currency,
+        start_date=os.getenv("REPORT_START_DATE") or None,
+        end_date=os.getenv("REPORT_END_DATE") or None,
+    )
     status = send_report(report_text)
     print(f"Estado envío: {status}")
